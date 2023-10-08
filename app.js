@@ -5,7 +5,7 @@ const cors = require("cors");
 const errorHandler = require("./src/middlewares/errorhandler");
 
 const token = require("./src/token/controller");
-const port = '3001';
+const port = '8080';
 
 const app = express();
 const router = express.Router();
@@ -18,7 +18,7 @@ app.use(cors());
 
 app.use(function (req, res, next) {
 
-  var allowedDomains = ['http://localhost:3000'];
+  var allowedDomains = ['http://localhost:3000', 'https://app.bankersmith.com'];
   var origin = req.headers.origin;
   if(allowedDomains.indexOf(origin) > -1){
     res.setHeader('Access-Control-Allow-Origin', '*');

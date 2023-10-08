@@ -62,7 +62,7 @@
 			},
 			{
 				"internalType": "uint256",
-				"name": "_quantity",
+				"name": "quantity",
 				"type": "uint256"
 			}
 		],
@@ -128,7 +128,7 @@
 			},
 			{
 				"internalType": "uint256",
-				"name": "_quantity",
+				"name": "quantity",
 				"type": "uint256"
 			}
 		],
@@ -240,19 +240,6 @@
 		"type": "function"
 	},
 	{
-		"inputs": [],
-		"name": "balance",
-		"outputs": [
-			{
-				"internalType": "uint256",
-				"name": "",
-				"type": "uint256"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
-	},
-	{
 		"inputs": [
 			{
 				"internalType": "address",
@@ -312,38 +299,12 @@
 	},
 	{
 		"inputs": [],
-		"name": "temp",
-		"outputs": [
-			{
-				"internalType": "address",
-				"name": "",
-				"type": "address"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
-	},
-	{
-		"inputs": [],
 		"name": "totalSupply",
 		"outputs": [
 			{
 				"internalType": "uint256",
 				"name": "",
 				"type": "uint256"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
-	},
-	{
-		"inputs": [],
-		"name": "xUSDFactory",
-		"outputs": [
-			{
-				"internalType": "address",
-				"name": "",
-				"type": "address"
 			}
 		],
 		"stateMutability": "view",

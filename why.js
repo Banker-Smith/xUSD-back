@@ -12,7 +12,7 @@ var SmartContractAddress = process.env.SC_ADDRESS;
 var SmartContractABI = require('./xUSDabi.json');
 
 var privateKey = Buffer.from(process.env.ACC_PRIV_ADDRESS, 'hex'); // Convert private key to buffer
-const web3 = new Web3('https://goerli.infura.io/v3/077ba21fca0c46a4b1ed8c7ddbb5b0e9'); // Use HTTPS instead of WSS
+const web3 = new Web3(process.env.INFURA); // Use HTTPS instead of WSS
 const signer = web3.eth.accounts.privateKeyToAccount(privateKey);
 
 const contract = new web3.eth.Contract(SmartContractABI, SmartContractAddress);
