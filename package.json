@@ -26,6 +26,7 @@
     "get-random-values": "^3.0.0",
     "node-binance-api": "^0.13.1",
     "swagger-ui-express": "^5.0.0",
+    "viem": "^1.18.2",
     "web3": "^4.1.2"
   }
 }

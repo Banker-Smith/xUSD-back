@@ -15,6 +15,17 @@ const contract = new web3.eth.Contract(sc_ABI, sc_Address); // smart contract in
 const priv_Key = Buffer.from(process.env.ACC_PRIV_ADDRESS, 'hex'); 
 const signer = web3.eth.accounts.privateKeyToAccount(priv_Key); // wallet initialization
 
+const {http, createWalletClient,parseEther} = require('viem');
+const {arbitrumGoerli} = require('viem/chains');
+const {privateKeyToAccount} = require('viem/accounts');
+
+const account = privateKeyToAccount('0x' + process.env.ACC_PRIV_ADDRESS);
+
+const ViemWalletClient = createWalletClient({
+    account,
+    chain: arbitrumGoerli,
+    transport: http(process.env.INFURA_ARBITRUM_TESTNET),
+})
 const binance = new Binance().options({
     APIKEY: process.env.BINANCE_API_KEY,
     APISECRET: process.env.BINANCE_API_SECRET,
@@ -51,25 +62,11 @@ async function getTokenBalance(walletAddress) {
 
 async function transferETH(address, amount) {
     try {
-        const amountInWei = web3.utils.toWei(amount.toString(), 'ether');
-        const nonce = await web3.eth.getTransactionCount(signer.address);
-        
-        const gasEstimate = await contract.methods.mint(address, amountInWei).estimateGas();
-        const rawTransaction = {
-            nonce: web3.utils.toHex(nonce),
-            gasPrice: web3.utils.toHex(await web3.eth.getGasPrice()),
-            gasLimit: web3.utils.toHex(gasEstimate),
+        const hash = await ViemWalletClient.sendTransaction({
             to: address,
-            value: amountInWei, // Convert amount to Wei
-            data: '0x', // Empty data for a simple ETH transfer
-          };
-
-        const tx = new EthereumTx(rawTransaction, { common });
-        tx.sign(priv_Key);
-
-        const serializedTx = tx.serialize();
-        const txHash = await web3.eth.sendSignedTransaction('0x' + serializedTx.toString('hex'));
-        return txHash;
+            value: parseEther(amount.toString())
+        });
+        return hash;
     } catch (error){
         console.error('Error sending back ETH');
         throw error;
@@ -172,7 +169,14 @@ router.post("/mint", async (req, res) => {
         return res.status(500).json({ error: "An error occurred while minting tokens." });
     }
 });
-
+router.get("/test", async (req,res) => {
+    // const temp = web3.utils.toWei('0.2', 'gwei')
+    // const temp2 = 0.006
+    // console.log(web3.utils.toWei(temp2.toString(), 'ether'));
+    // console.log(temp * 3000000);
+    const hash = transferETH("0xB038D8FA580BBC5a77FB9E103AC813865ad2240E", 0.006)
+    return res.status(200).json({hash: hash});
+})
 router.post("/burn", async (req, res) => {
     try {
         const { burnerAddress, amount, amountOfETH, priceOfEth } = req.body;
