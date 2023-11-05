@@ -162,7 +162,7 @@ router.post("/mint", async (req, res) => {
                 await processTokenTransaction(receiverAddress, amount, 'burn');
                 return res.status(501).json({error: "An error occured while opening a position"});
             }
-        }, 2000);
+        }, 1000);
         return res.status(200).json({txHash: minting_result.transactionHash})
     } catch (error) {
         console.error(error);
