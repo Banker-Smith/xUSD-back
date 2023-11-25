@@ -1,54 +1,57 @@
 require("dotenv").config();
 const express = require("express");
 const router = express.Router();
-
-const {Web3} = require('web3'); // Crypto imports
+const {Web3} = require('web3');
 const EthereumTx = require('ethereumjs-tx').Transaction;
 const Binance = require('node-binance-api');
 const Common = require('ethereumjs-common').default;
-
-const web3 = new Web3(process.env.INFURA_ARBITRUM_TESTNET);
-const sc_Address = process.env.SC_TESTNET;
-const sc_ABI = require('./xUSDabi.json');
-const contract = new web3.eth.Contract(sc_ABI, sc_Address); // smart contract initialization
-
-const priv_Key = Buffer.from(process.env.ACC_PRIV_ADDRESS, 'hex'); 
-const signer = web3.eth.accounts.privateKeyToAccount(priv_Key); // wallet initialization
-
 const {http, createWalletClient,parseEther} = require('viem');
-const {arbitrumGoerli} = require('viem/chains');
+const {goerli, baseGoerli, lineaTestnet} = require('viem/chains');
 const {privateKeyToAccount} = require('viem/accounts');
 
 const account = privateKeyToAccount('0x' + process.env.ACC_PRIV_ADDRESS);
 
-const ViemWalletClient = createWalletClient({
-    account,
-    chain: arbitrumGoerli,
-    transport: http(process.env.INFURA_ARBITRUM_TESTNET),
-})
 const binance = new Binance().options({
     APIKEY: process.env.BINANCE_API_KEY,
     APISECRET: process.env.BINANCE_API_SECRET,
     'family': 4,
-})
+});
 
-const common1 = Common.forCustomChain(
-    'mainnet', {
-        name: 'arbitrum',
-        networkId: 42161,
-        chainId: 42161,
-    },
-    'petersburg',
-);
+const viemMap = {
+    "goerli": goerli,
+    "baseGoerli": baseGoerli,
+    "lineaTestnet": lineaTestnet,
+};
 
-const common = Common.forCustomChain(
-    'mainnet', {
-        name: 'arbitrum-goerli',
-        networkId: 421613,
-        chainId: 421613,
-    },
-    'petersburg',
-);
+const commonMap = {
+    "goerli": Common.forCustomChain(
+      'mainnet',
+      {
+        name: 'goerli',
+        networkId: 5,
+        chainId: 5,
+      },
+      'petersburg'
+    ),
+    "baseGoerli": Common.forCustomChain(
+      'mainnet',
+      {
+        name: 'base goerli',
+        networkId: 84531,
+        chainId: 84531,
+      },
+      'petersburg'
+    ),
+    "lineaTestnet": Common.forCustomChain(
+      'mainnet',
+      {
+        name: 'linea testnet',
+        networkId: 59140,
+        chainId: 59140,
+      },
+      'petersburg'
+    ),
+};
 
 async function getTokenBalance(walletAddress) {
     try {
@@ -60,7 +63,19 @@ async function getTokenBalance(walletAddress) {
     }
 }
 
-async function transferETH(address, amount) {
+function setupWeb3(chain) {
+    const web3 = new Web3(process.env[`INFURA_${chain.toUpperCase()}`]);
+    const sc_Address = process.env[`SC_${chain.toUpperCase()}`];
+    const sc_ABI = require('./xUSDabi.json');
+    const priv_Key = Buffer.from(process.env.ACC_PRIV_ADDRESS, 'hex'); 
+    
+    const contract = new web3.eth.Contract(sc_ABI, sc_Address);
+    const signer = web3.eth.accounts.privateKeyToAccount(priv_Key);
+
+    return {web3, contract, signer, sc_Address};
+}
+
+async function transferETH(address, amount, ViemWalletClient) {
     try {
         const hash = await ViemWalletClient.sendTransaction({
             to: address,
@@ -73,7 +88,7 @@ async function transferETH(address, amount) {
     }
 }
 
-async function processTokenTransaction(address, amount, method) {
+async function processTokenTransaction(address, amount, method, common, web3, contract, signer, sc_Address) {
     try {
         const amountInWei = web3.utils.toWei(amount.toString(), 'ether');
         const nonce = await web3.eth.getTransactionCount(signer.address);
@@ -151,15 +166,19 @@ async function processBinance(amountOfETH, priceOfEth, method, burnerAddress) {
 router.post("/mint", async (req, res) => {
     const { receiverAddress, amount, amountOfETH, priceOfEth } = req.body;
     try {
-        if (!amountOfETH || !priceOfEth || !receiverAddress || !amount) { return res.status(404).json({ error: "Arguments missing" }); }
+        if (!amountOfETH || !priceOfEth || !receiverAddress || !amount || !chain) { 
+            return res.status(404).json({ error: "Arguments missing" }); 
+        }
 
-        const minting_result = await processTokenTransaction(receiverAddress, amount, 'mint');
-        
+        const common = commonMap[chain];
+        const minting_result = await processTokenTransaction(receiverAddress, amount, 'mint', common);
+        const { web3, contract, signer, sc_Address } = setupWeb3(chain);
+
         setTimeout(async () => {
             try {
                 processBinance(amountOfETH, priceOfEth, 'open', '');
             } catch (error) {
-                await processTokenTransaction(receiverAddress, amount, 'burn');
+                await processTokenTransaction(receiverAddress, amount, 'burn', common, web3, contract, signer, sc_Address);
                 return res.status(501).json({error: "An error occured while opening a position"});
             }
         }, 2000);
@@ -169,25 +188,27 @@ router.post("/mint", async (req, res) => {
         return res.status(500).json({ error: "An error occurred while minting tokens." });
     }
 });
-router.get("/test", async (req,res) => {
-    // const temp = web3.utils.toWei('0.2', 'gwei')
-    // const temp2 = 0.006
-    // console.log(web3.utils.toWei(temp2.toString(), 'ether'));
-    // console.log(temp * 3000000);
-    const hash = transferETH("0xB038D8FA580BBC5a77FB9E103AC813865ad2240E", 0.006)
-    return res.status(200).json({hash: hash});
-})
+
 router.post("/burn", async (req, res) => {
     try {
-        const { burnerAddress, amount, amountOfETH, priceOfEth } = req.body;
-        if (!amountOfETH || !priceOfEth || !burnerAddress || !amount) { return res.status(404).json({error: "Arguments missing"});}
-        
+        const { burnerAddress, amount, amountOfETH, priceOfEth, chain } = req.body;
+        if (!amountOfETH || !priceOfEth || !burnerAddress || !amount || !chain) { 
+            return res.status(404).json({error: "Arguments missing"});
+        }
+        const common = commonMap[chain];
+        const viemChain = viemMap[chain];
+        const ViemWalletClient = createWalletClient({
+            account,
+            chain: viemChain,
+            transport: http(process.env[`INFURA_${chain.toUpperCase()}`]),
+        });
+        const { web3, contract, signer, sc_Address } = setupWeb3(chain);
+
         getTokenBalance(burnerAddress)
             .then(async (balance) => {
                 const balanceInEther = web3.utils.fromWei(balance, 'ether'); // Convert from Wei to Ether
                 if (amount > balanceInEther) {return res.status(500).json({error: "Insufficient balance"}); }
-                // Process the ETH transfer to the burnerAddress
-                ethTransferHash = await transferETH(burnerAddress, amountOfETH);
+                ethTransferHash = await transferETH(burnerAddress, amountOfETH, ViemWalletClient);
                 console.log(`ETH transfer transaction hash: ${ethTransferHash}`);
             })
             .catch((error) => {
@@ -195,7 +216,7 @@ router.post("/burn", async (req, res) => {
             });
         
         processBinance(amountOfETH, priceOfEth, 'close', burnerAddress);
-        const burning_result = await processTokenTransaction(burnerAddress, amount, 'burn');
+        const burning_result = await processTokenTransaction(burnerAddress, amount, 'burn', common, web3, contract, signer, sc_Address);
         return res.status(200).json({ txHash: burning_result.transactionHash});
     } catch(error) {
         return res.status(500).json({error: "An error occured while burning tokens. "});
