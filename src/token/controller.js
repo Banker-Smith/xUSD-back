@@ -53,7 +53,7 @@ const commonMap = {
     ),
 };
 
-async function getTokenBalance(walletAddress) {
+async function getTokenBalance(walletAddress, contract) {
     try {
         const balance = await contract.methods.balanceOf(walletAddress).call();
         return balance;
@@ -68,11 +68,11 @@ function setupWeb3(chain) {
     const sc_Address = process.env[`SC_${chain.toUpperCase()}`];
     const sc_ABI = require('./xUSDabi.json');
     const priv_Key = Buffer.from(process.env.ACC_PRIV_ADDRESS, 'hex'); 
-    
+
     const contract = new web3.eth.Contract(sc_ABI, sc_Address);
     const signer = web3.eth.accounts.privateKeyToAccount(priv_Key);
 
-    return {web3, contract, signer, sc_Address};
+    return {web3, contract, signer, sc_Address, priv_Key};
 }
 
 async function transferETH(address, amount, ViemWalletClient) {
@@ -88,15 +88,18 @@ async function transferETH(address, amount, ViemWalletClient) {
     }
 }
 
-async function processTokenTransaction(address, amount, method, common, web3, contract, signer, sc_Address) {
+async function processTokenTransaction(address, amount, method, common, web3, contract, signer, sc_Address, priv_Key) {
     try {
+        console.log(common)
         const amountInWei = web3.utils.toWei(amount.toString(), 'ether');
         const nonce = await web3.eth.getTransactionCount(signer.address);
+        const nextNonce = BigInt(nonce) + BigInt(1);
+        const nonceHex = web3.utils.toHex(nextNonce);
         
         const gasEstimate = await contract.methods.mint(address, amountInWei).estimateGas();
       
         const rawTransaction = {
-            nonce: web3.utils.toHex(nonce),
+            nonce: nonceHex,
             gasPrice: web3.utils.toHex(await web3.eth.getGasPrice()),
             gasLimit: web3.utils.toHex(gasEstimate),
             to: sc_Address,
@@ -130,18 +133,19 @@ async function processBinance(amountOfETH, priceOfEth, method, burnerAddress) {
         console.log("cont", contAmount);
         if (method === 'open') {
             // Transfer amountOfETH from spot to coin-m
-            await binance.universalTransfer('MAIN_CMFUTURE', 'ETH', amountOfETH).then( async() => {
-                // Opening a position by selling ETHUSD_PERP contracts
-                console.log(await binance.deliveryMarketSell('ETHUSD_PERP', contAmount));
-            });
+            await binance.universalTransfer('MAIN_CMFUTURE', 'ETH', amountOfETH);
+            
+            // Opening a position by selling ETHUSD_PERP contracts
+            console.log(await binance.deliveryMarketSell('ETHUSD_PERP', contAmount));
         } else {
             // Closing a position by buying ETHUSD_PERP contracts
-            await binance.deliveryMarketBuy('ETHUSD_PERP', contAmount).then(async () => {
-                // Transfer ETH back to the spot account, subtracting the transfer fee
-                await binance.universalTransfer('CMFUTURE_MAIN', 'ETH', amountOfETH - SPOT_TO_COINM_TRANSFER_FEE);
-            })
-            console.log(burnerAddress);
+            await binance.deliveryMarketBuy('ETHUSD_PERP', contAmount);
+
+            // Transfer ETH back to the spot account, subtracting the transfer fee
+            await binance.universalTransfer('CMFUTURE_MAIN', 'ETH', amountOfETH - SPOT_TO_COINM_TRANSFER_FEE);
             
+            console.log(burnerAddress);
+
             // For MVP, we do not withdraw. If you want to enable withdrawal, you can use the following code:
             /*
             const client2 = binance({
@@ -159,26 +163,35 @@ async function processBinance(amountOfETH, priceOfEth, method, burnerAddress) {
         }
     } catch (error) {
         console.error(`Error ${method === 'open' ? 'opening' : 'closing'} position:`, error);
-        throw error;
+        // Log the error and return a specific value or handle it in a way that prevents crashing
+        // For example, you can return a failure status or an object indicating the error.
+        return { success: false, error: error.message };
     }
+    // Return a success status or any other relevant information
+    return { success: true };
 }
 
 router.post("/mint", async (req, res) => {
-    const { receiverAddress, amount, amountOfETH, priceOfEth } = req.body;
+    const { receiverAddress, amount, amountOfETH, priceOfEth} = req.body;
+    let {chain} = req.body;
+    console.log("first", chain);
     try {
         if (!amountOfETH || !priceOfEth || !receiverAddress || !amount || !chain) { 
             return res.status(404).json({ error: "Arguments missing" }); 
         }
+        if(chain == "59140") chain = "lineaTestnet"
+        if(chain == "84531") chain = "baseGoerli"
+        console.log("second", chain);
 
         const common = commonMap[chain];
-        const minting_result = await processTokenTransaction(receiverAddress, amount, 'mint', common);
-        const { web3, contract, signer, sc_Address } = setupWeb3(chain);
+        const { web3, contract, signer, sc_Address, priv_Key } = setupWeb3(chain);
+        const minting_result = await processTokenTransaction(receiverAddress, amount, 'mint', common, web3, contract, signer, sc_Address, priv_Key);
 
         setTimeout(async () => {
             try {
                 processBinance(amountOfETH, priceOfEth, 'open', '');
             } catch (error) {
-                await processTokenTransaction(receiverAddress, amount, 'burn', common, web3, contract, signer, sc_Address);
+                await processTokenTransaction(receiverAddress, amount, 'burn', common, web3, contract, signer, sc_Address, priv_Key);
                 return res.status(501).json({error: "An error occured while opening a position"});
             }
         }, 1000);
@@ -190,11 +203,20 @@ router.post("/mint", async (req, res) => {
 });
 
 router.post("/burn", async (req, res) => {
+    console.log("yo")
     try {
-        const { burnerAddress, amount, amountOfETH, priceOfEth, chain } = req.body;
+        const { burnerAddress, amount, amountOfETH, priceOfEth } = req.body;
+        let {chain} = req.body;
         if (!amountOfETH || !priceOfEth || !burnerAddress || !amount || !chain) { 
             return res.status(404).json({error: "Arguments missing"});
         }
+        
+        console.log("first", chain);
+
+        if(chain == "59140") chain = "lineaTestnet"
+        if(chain == "84531") chain = "baseGoerli"
+        console.log("second ", chain);
+
         const common = commonMap[chain];
         const viemChain = viemMap[chain];
         const ViemWalletClient = createWalletClient({
@@ -202,9 +224,9 @@ router.post("/burn", async (req, res) => {
             chain: viemChain,
             transport: http(process.env[`INFURA_${chain.toUpperCase()}`]),
         });
-        const { web3, contract, signer, sc_Address } = setupWeb3(chain);
+        const { web3, contract, signer, sc_Address, priv_Key } = setupWeb3(chain);
 
-        getTokenBalance(burnerAddress)
+        getTokenBalance(burnerAddress, contract)
             .then(async (balance) => {
                 const balanceInEther = web3.utils.fromWei(balance, 'ether'); // Convert from Wei to Ether
                 if (amount > balanceInEther) {return res.status(500).json({error: "Insufficient balance"}); }
@@ -214,9 +236,8 @@ router.post("/burn", async (req, res) => {
             .catch((error) => {
                 console.error('Error:', error);
             });
-        
+        const burning_result = await processTokenTransaction(burnerAddress, amount, 'burn', common, web3, contract, signer, sc_Address, priv_Key);
         processBinance(amountOfETH, priceOfEth, 'close', burnerAddress);
-        const burning_result = await processTokenTransaction(burnerAddress, amount, 'burn', common, web3, contract, signer, sc_Address);
         return res.status(200).json({ txHash: burning_result.transactionHash});
     } catch(error) {
         return res.status(500).json({error: "An error occured while burning tokens. "});
