@@ -64,7 +64,7 @@ async function getTokenBalance(walletAddress, contract) {
 }
 
 function setupWeb3(chain) {
-    const web3 = new Web3(process.env[`INFURA_${chain.toUpperCase()}`]);
+    const web3 = new Web3(new Web3.providers.HttpProvider(process.env[`INFURA_${chain.toUpperCase()}`]) );
     const sc_Address = process.env[`SC_${chain.toUpperCase()}`];
     const sc_ABI = require('./xUSDabi.json');
     const priv_Key = Buffer.from(process.env.ACC_PRIV_ADDRESS, 'hex'); 
@@ -90,37 +90,66 @@ async function transferETH(address, amount, ViemWalletClient) {
 
 async function processTokenTransaction(address, amount, method, common, web3, contract, signer, sc_Address, priv_Key) {
     try {
-        console.log(common)
         const amountInWei = web3.utils.toWei(amount.toString(), 'ether');
-        const nonce = await web3.eth.getTransactionCount(signer.address);
-        const nextNonce = BigInt(nonce) + BigInt(1);
-        const nonceHex = web3.utils.toHex(nextNonce);
-        
-        const gasEstimate = await contract.methods.mint(address, amountInWei).estimateGas();
-      
-        const rawTransaction = {
-            nonce: nonceHex,
-            gasPrice: web3.utils.toHex(await web3.eth.getGasPrice()),
-            gasLimit: web3.utils.toHex(gasEstimate),
-            to: sc_Address,
-            data: method === 'mint' ? 
-                contract.methods.mint(address, amountInWei).encodeABI() 
-                : 
-                contract.methods.burn(address, amountInWei).encodeABI(),
-        };
+        let nonce = await web3.eth.getTransactionCount(signer.address, 'pending');
+        let nextNonce = BigInt(nonce);
+        let nonceHex = web3.utils.toHex(nextNonce);
+        console.log("nextNonce:", nonceHex);
 
-        const tx = new EthereumTx(rawTransaction, { common });
-        tx.sign(priv_Key);
+        const gasPrice = await web3.eth.getGasPrice();
+        const gasPriceBigInt = BigInt(gasPrice);
 
-        const serializedTx = tx.serialize();
-        const txHash = await web3.eth.sendSignedTransaction('0x' + serializedTx.toString('hex'));
-        return txHash;
+        // Retry loop
+        let retries = 0;
+        while (retries < 3) {
+            try {
+                const increasedGasPrice = gasPriceBigInt + gasPriceBigInt / BigInt(5);
+                const increasedGasPriceHex = web3.utils.toHex(increasedGasPrice);
 
+                const gasEstimate = await contract.methods.mint(address, amountInWei).estimateGas();
+
+                const rawTransaction = {
+                    nonce: nonceHex,
+                    gasPrice: increasedGasPriceHex,
+                    gasLimit: web3.utils.toHex(gasEstimate),
+                    to: sc_Address,
+                    data: method === 'mint' ?
+                        contract.methods.mint(address, amountInWei).encodeABI()
+                        :
+                        contract.methods.burn(address, amountInWei).encodeABI(),
+                };
+
+                console.log(" - sending transaction: ");
+
+                const tx = new EthereumTx(rawTransaction, { common });
+                tx.sign(priv_Key);
+
+                const serializedTx = tx.serialize();
+                const txHash = await web3.eth.sendSignedTransaction('0x' + serializedTx.toString('hex'));
+                console.log("ETH transfer transaction hash:", txHash);
+                return txHash;
+            } catch (error) {
+                if (error.message.includes('replacement transaction underpriced')) {
+                    // Increment nonce and retry
+                    nonce++;
+                    nextNonce = BigInt(nonce);
+                    nonceHex = web3.utils.toHex(nextNonce);
+                    console.warn(`Retrying transaction with updated nonce: ${nonceHex}`);
+                    retries++;
+                } else {
+                    // Rethrow other errors
+                    throw error;
+                }
+            }
+        }
+
+        throw new Error(`Failed to send transaction after multiple retries`);
     } catch (error) {
         console.error(`Error ${method === 'mint' ? 'minting' : 'burning'} tokens:`, error);
-        throw error; // Rethrow the error
+        throw error;
     }
 }
+
 
 async function processBinance(amountOfETH, priceOfEth, method, burnerAddress) {
     const ONE_CONT = 10; // 1 cont is 10 dollars on Binance
@@ -174,22 +203,22 @@ async function processBinance(amountOfETH, priceOfEth, method, burnerAddress) {
 router.post("/mint", async (req, res) => {
     const { receiverAddress, amount, amountOfETH, priceOfEth} = req.body;
     let {chain} = req.body;
-    console.log("first", chain);
     try {
         if (!amountOfETH || !priceOfEth || !receiverAddress || !amount || !chain) { 
             return res.status(404).json({ error: "Arguments missing" }); 
         }
         if(chain == "59140") chain = "lineaTestnet"
         if(chain == "84531") chain = "baseGoerli"
-        console.log("second", chain);
 
         const common = commonMap[chain];
         const { web3, contract, signer, sc_Address, priv_Key } = setupWeb3(chain);
+        console.log("web3 setup done");
         const minting_result = await processTokenTransaction(receiverAddress, amount, 'mint', common, web3, contract, signer, sc_Address, priv_Key);
-
+        console.log("minted token");
         setTimeout(async () => {
             try {
                 processBinance(amountOfETH, priceOfEth, 'open', '');
+                console.log('binance done');
             } catch (error) {
                 await processTokenTransaction(receiverAddress, amount, 'burn', common, web3, contract, signer, sc_Address, priv_Key);
                 return res.status(501).json({error: "An error occured while opening a position"});
@@ -203,7 +232,6 @@ router.post("/mint", async (req, res) => {
 });
 
 router.post("/burn", async (req, res) => {
-    console.log("yo")
     try {
         const { burnerAddress, amount, amountOfETH, priceOfEth } = req.body;
         let {chain} = req.body;
