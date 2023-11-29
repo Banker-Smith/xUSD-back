@@ -1,4 +1,5 @@
 require("dotenv").config();
+
 const express = require("express");
 const router = express.Router();
 const {Web3} = require('web3');
@@ -81,6 +82,7 @@ async function transferETH(address, amount, ViemWalletClient) {
             to: address,
             value: parseEther(amount.toString())
         });
+        console.log("Transaction succeeded", hash);
         return hash;
     } catch (error){
         console.error('Error sending back ETH');
@@ -101,7 +103,7 @@ async function processTokenTransaction(address, amount, method, common, web3, co
 
         // Retry loop
         let retries = 0;
-        while (retries < 3) {
+        while (retries < 5) {
             try {
                 const increasedGasPrice = gasPriceBigInt + gasPriceBigInt / BigInt(5);
                 const increasedGasPriceHex = web3.utils.toHex(increasedGasPrice);
@@ -126,7 +128,7 @@ async function processTokenTransaction(address, amount, method, common, web3, co
 
                 const serializedTx = tx.serialize();
                 const txHash = await web3.eth.sendSignedTransaction('0x' + serializedTx.toString('hex'));
-                console.log("ETH transfer transaction hash:", txHash);
+                console.log("xUSD mint/burn transaction hash:", txHash);
                 return txHash;
             } catch (error) {
                 if (error.message.includes('replacement transaction underpriced')) {
@@ -201,12 +203,12 @@ async function processBinance(amountOfETH, priceOfEth, method, burnerAddress) {
 }
 
 router.post("/mint", async (req, res) => {
-    const { receiverAddress, amount, amountOfETH, priceOfEth} = req.body;
-    let {chain} = req.body;
     try {
-        if (!amountOfETH || !priceOfEth || !receiverAddress || !amount || !chain) { 
-            return res.status(404).json({ error: "Arguments missing" }); 
-        }
+        const { receiverAddress, amount, amountOfETH, priceOfEth} = req.body;
+        let {chain} = req.body;
+    
+        if (!amountOfETH || !priceOfEth || !receiverAddress || !amount || !chain) return res.status(404).json({ error: "Arguments missing" });
+        
         if(chain == "59140") chain = "lineaTestnet"
         if(chain == "84531") chain = "baseGoerli"
 
@@ -215,6 +217,7 @@ router.post("/mint", async (req, res) => {
         console.log("web3 setup done");
         const minting_result = await processTokenTransaction(receiverAddress, amount, 'mint', common, web3, contract, signer, sc_Address, priv_Key);
         console.log("minted token");
+
         setTimeout(async () => {
             try {
                 processBinance(amountOfETH, priceOfEth, 'open', '');
@@ -235,38 +238,52 @@ router.post("/burn", async (req, res) => {
     try {
         const { burnerAddress, amount, amountOfETH, priceOfEth } = req.body;
         let {chain} = req.body;
-        if (!amountOfETH || !priceOfEth || !burnerAddress || !amount || !chain) { 
-            return res.status(404).json({error: "Arguments missing"});
-        }
-        
-        console.log("first", chain);
+        if (!amountOfETH || !priceOfEth || !burnerAddress || !amount || !chain) return res.status(404).json({error: "Arguments missing"});
 
+        // To-do find a better solution getNetwork() on frontend for goerli it displays goerli for others it returns a number
         if(chain == "59140") chain = "lineaTestnet"
         if(chain == "84531") chain = "baseGoerli"
-        console.log("second ", chain);
+        console.log("final chain", chain);
 
         const common = commonMap[chain];
         const viemChain = viemMap[chain];
+        
         const ViemWalletClient = createWalletClient({
             account,
             chain: viemChain,
             transport: http(process.env[`INFURA_${chain.toUpperCase()}`]),
         });
-        const { web3, contract, signer, sc_Address, priv_Key } = setupWeb3(chain);
 
-        getTokenBalance(burnerAddress, contract)
-            .then(async (balance) => {
-                const balanceInEther = web3.utils.fromWei(balance, 'ether'); // Convert from Wei to Ether
-                if (amount > balanceInEther) {return res.status(500).json({error: "Insufficient balance"}); }
-                ethTransferHash = await transferETH(burnerAddress, amountOfETH, ViemWalletClient);
-                console.log(`ETH transfer transaction hash: ${ethTransferHash}`);
-            })
-            .catch((error) => {
-                console.error('Error:', error);
+        console.log("viemChain", viemChain);
+
+        const { web3, contract, signer, sc_Address, priv_Key } = setupWeb3(chain);
+        let burning_result;
+        
+        if (chain == "baseGoerli") {
+            const ViemWalletClient = createWalletClient({
+                account,
+                chain: baseGoerli,
+                transport: http(process.env.INFURA_BASEGOERLI),
             });
-        const burning_result = await processTokenTransaction(burnerAddress, amount, 'burn', common, web3, contract, signer, sc_Address, priv_Key);
-        processBinance(amountOfETH, priceOfEth, 'close', burnerAddress);
-        return res.status(200).json({ txHash: burning_result.transactionHash});
+            // Send transaction
+            const hash = await ViemWalletClient.sendTransaction({
+                to: burnerAddress,
+                value: parseEther(amountOfETH.toString())
+            });
+            console.log("Token transfer succeeded. Transaction Hash:", hash);
+        } else {
+            ethTransferHash = await transferETH(burnerAddress, amountOfETH, ViemWalletClient);
+            console.log("Transferrning eth back", ethTransferHash);
+        } 
+        setTimeout(async () => {
+            burning_result = await processTokenTransaction(burnerAddress, amount, 'burn', common, web3, contract, signer, sc_Address, priv_Key);
+            console.log("starting binance")
+            
+            processBinance(amountOfETH, priceOfEth, 'close', burnerAddress);
+            console.log("binance part done");
+            
+            return res.status(200).json({txHash: burning_result.transactionHash});
+        }, 2000);
     } catch(error) {
         return res.status(500).json({error: "An error occured while burning tokens. "});
     }
